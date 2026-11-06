@@ -725,5 +725,3 @@ elif opcion == "📊 Reportes y Consultas":
                         st.rerun()
         else:
             st.write("👈 Seleccione un registro en la tabla de la izquierda para editarlo o eliminarlo.")
-'''
-
