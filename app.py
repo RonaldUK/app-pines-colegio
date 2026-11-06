@@ -1,15 +1,9 @@
-"""
-Sistema Web para Entrega y Gestión de Pines Escolares
-Desarrollado en Python con Streamlit y OpenPyXL
-Trabaja directamente con el archivo Excel local: Entrega_Pines_Colegio_BP.xlsx
-"""
 
 import streamlit as st
 import pandas as pd
 import openpyxl
 from datetime import datetime
 import os
-import io
 
 st.set_page_config(
     page_title="Sistema de Pines Escolares",
@@ -50,7 +44,6 @@ def get_workbook():
         wb.create_sheet("REPORTES_RESUMEN")
         wb.save(EXCEL_PATH)
     
-    # Check and add 'Estado' header if missing from older versions
     wb = openpyxl.load_workbook(EXCEL_PATH)
     if "ENTREGA_PIN" in wb.sheetnames:
         ws_ent = wb["ENTREGA_PIN"]
@@ -66,18 +59,16 @@ def get_workbook():
 def cargar_datos():
     wb = get_workbook()
     
-    # 1. Estudiantes
     ws_est = wb["Estudiantes"]
     data_est = list(ws_est.iter_rows(values_only=True))
     if data_est and len(data_est) > 1:
         headers = [str(h).strip() if h else f"col_{i}" for i, h in enumerate(data_est[0])]
         df_est = pd.DataFrame(data_est[1:], columns=headers).dropna(how='all')
         if 'DNI' in df_est.columns:
-            df_est['DNI'] = df_est['DNI'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+            df_est['DNI'] = df_est['DNI'].astype(str).str.replace(r'\\.0$', '', regex=True).str.strip()
     else:
         df_est = pd.DataFrame(columns=["Nro", "DNI", "Estudiante", "Grado y Sección"])
 
-    # 2. Pines
     ws_pin = wb["PINES"]
     data_pin = list(ws_pin.iter_rows(values_only=True))
     if data_pin and len(data_pin) > 1:
@@ -86,14 +77,13 @@ def cargar_datos():
     else:
         df_pin = pd.DataFrame(columns=["Nro", "Nombre del Pin", "Categoría", "Descripción"])
 
-    # 3. Entregas
     ws_ent = wb["ENTREGA_PIN"]
     data_ent = list(ws_ent.iter_rows(values_only=True))
     if data_ent and len(data_ent) > 1:
         headers = [str(h).strip() if h else f"col_{i}" for i, h in enumerate(data_ent[0])]
         df_ent = pd.DataFrame(data_ent[1:], columns=headers).dropna(how='all')
         if 'DNI' in df_ent.columns:
-            df_ent['DNI'] = df_ent['DNI'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+            df_ent['DNI'] = df_ent['DNI'].astype(str).str.replace(r'\\.0$', '', regex=True).str.strip()
         if 'Estado' not in df_ent.columns:
             df_ent['Estado'] = 'ENTREGADO'
     else:
@@ -110,7 +100,6 @@ opcion = st.sidebar.radio(
     index=0
 )
 
-# --- BOTÓN DE DESCARGA DE EXCEL ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("📥 Exportar Datos")
 try:
@@ -126,181 +115,253 @@ except FileNotFoundError:
     st.sidebar.warning("El archivo Excel aún no se ha generado.")
 
 
-# Cargar data fresca
 df_est, df_pin, df_ent = cargar_datos()
 
 # ==========================================================
-# 1. MODULO DE ENTREGA DE PINES (CARRITO / BLOQUES)
+# 1. MODULO DE ENTREGA DE PINES (INDIVIDUAL Y BLOQUE)
 # ==========================================================
 if opcion == "🎁 Entrega de Pines":
-    st.header("Formulario de Entrega de Pines por Bloques")
-    st.caption("Busca y añade alumnos a tu 'Lista de Seleccionados' para asignarles pines de forma masiva.")
+    st.header("Formulario de Entrega de Pines")
     
-    # Inicializar el carrito en session_state si no existe
-    if 'cart_pines' not in st.session_state:
-        st.session_state.cart_pines = {}
+    # Toggle para seleccionar el modo
+    modo_entrega = st.radio("Selecciona el Modo de Entrega:", ["👤 Individual (Uno por Uno)", "👥 Por Bloques (Varios a la vez)"], horizontal=True)
+    st.markdown("---")
     
-    col_izq, col_der = st.columns([1.3, 1])
-    
-    with col_izq:
-        # --- TABLA SUPERIOR: BÚSQUEDA ---
-        st.subheader("1. Búsqueda de Estudiantes")
-        filtro_txt = st.text_input("🔍 Buscar por Nombre, DNI o Grado:", key="busq_entrega_pin", placeholder="Escriba para filtrar...")
+    if modo_entrega == "👤 Individual (Uno por Uno)":
+        st.caption("Selecciona un alumno de la tabla para ver sus pines previos y registrar uno nuevo.")
+        col_izq, col_der = st.columns([1.3, 1])
         
-        df_busqueda = df_est[['DNI', 'Estudiante', 'Grado y Sección']].copy()
-        
-        # Excluir de la búsqueda a los que ya están en la lista inferior
-        if st.session_state.cart_pines:
-            df_busqueda = df_busqueda[~df_busqueda['DNI'].astype(str).isin(st.session_state.cart_pines.keys())]
+        with col_izq:
+            st.subheader("1. Seleccionar Estudiante")
+            filtro_txt = st.text_input("🔍 Buscar por Nombre, DNI o Grado:", key="busq_entrega_indiv", placeholder="Escriba para filtrar...")
             
-        if filtro_txt:
-            condicion = (
-                df_busqueda['Estudiante'].astype(str).str.contains(filtro_txt, case=False, na=False) |
-                df_busqueda['DNI'].astype(str).str.contains(filtro_txt, case=False, na=False) |
-                df_busqueda['Grado y Sección'].astype(str).str.contains(filtro_txt, case=False, na=False)
-            )
-            df_busqueda = df_busqueda[condicion]
-        
-        df_busqueda = df_busqueda.reset_index(drop=True)
-        
-        st.caption("👆 Selecciona casillas y presiona el botón para bajarlos a la lista:")
-        sel_top = st.dataframe(
-            df_busqueda,
-            use_container_width=True,
-            hide_index=True,
-            selection_mode="multi-row",
-            on_select="rerun",
-            key="tabla_busqueda_pines"
-        )
-        
-        # Botón para añadir al carrito
-        if st.button("⬇️ Añadir Marcados a la Lista", type="primary"):
-            if sel_top.selection.rows:
-                for r in sel_top.selection.rows:
-                    alum = df_busqueda.iloc[r]
-                    st.session_state.cart_pines[str(alum['DNI'])] = alum.to_dict()
-                st.rerun()
-                
-        st.markdown("---")
-        
-        # --- TABLA INFERIOR: SELECCIONADOS ---
-        st.subheader("2. Alumnos Seleccionados (Bloque a entregar)")
-        
-        if not st.session_state.cart_pines:
-            st.info("La lista está vacía. Busca alumnos arriba y añádelos.")
-            alumnos_seleccionados = []
-        else:
-            df_cart = pd.DataFrame(list(st.session_state.cart_pines.values()))
-            sel_bot = st.dataframe(
-                df_cart,
+            df_filtrada = df_est[['DNI', 'Estudiante', 'Grado y Sección']].copy()
+            if filtro_txt:
+                condicion = (
+                    df_filtrada['Estudiante'].astype(str).str.contains(filtro_txt, case=False, na=False) |
+                    df_filtrada['DNI'].astype(str).str.contains(filtro_txt, case=False, na=False) |
+                    df_filtrada['Grado y Sección'].astype(str).str.contains(filtro_txt, case=False, na=False)
+                )
+                df_filtrada = df_filtrada[condicion]
+            
+            df_filtrada = df_filtrada.reset_index(drop=True)
+            
+            st.caption("👆 Haz clic en una fila para seleccionarlo:")
+            evento_seleccion = st.dataframe(
+                df_filtrada,
                 use_container_width=True,
                 hide_index=True,
-                selection_mode="multi-row",
+                selection_mode="single-row",
                 on_select="rerun",
-                key="tabla_cart_pines"
+                key="tabla_alumnos_indiv"
             )
             
-            # Botón para quitar del carrito
-            if st.button("⬆️ Quitar Marcados de la Lista"):
-                if sel_bot.selection.rows:
-                    for r in sel_bot.selection.rows:
-                        dni_quitar = str(df_cart.iloc[r]['DNI'])
-                        if dni_quitar in st.session_state.cart_pines:
-                            del st.session_state.cart_pines[dni_quitar]
-                    st.rerun()
-            
-            alumnos_seleccionados = list(st.session_state.cart_pines.values())
+            alumno_sel = None
+            filas_seleccionadas = evento_seleccion.selection.get("rows", [])
+            if filas_seleccionadas and filas_seleccionadas[0] < len(df_filtrada):
+                alumno_sel = df_filtrada.iloc[filas_seleccionadas[0]]
+            elif not df_filtrada.empty:
+                alumno_sel = df_filtrada.iloc[0]
 
-    with col_der:
-        if len(alumnos_seleccionados) > 0:
-            st.subheader("Resumen de Selección")
-            
-            if len(alumnos_seleccionados) == 1:
-                alumno_sel = alumnos_seleccionados[0]
+        with col_der:
+            if alumno_sel is not None:
                 dni_actual = str(alumno_sel['DNI'])
-                st.info(f"👤 **Alumno:** {alumno_sel['Estudiante']}\n\n📌 **DNI:** {dni_actual} | **Grado:** {alumno_sel['Grado y Sección']}")
+                st.subheader("2. Pines Asignados Previamente")
+                st.info(f"👤 **Alumno:** {alumno_sel['Estudiante']}\\n\\n📌 **DNI:** {dni_actual} | **Grado:** {alumno_sel['Grado y Sección']}")
                 
                 pines_previos = df_ent[df_ent['DNI'] == dni_actual]
+                pines_ya_entregados_nombres = []
+                
                 if not pines_previos.empty:
+                    pines_ya_entregados_nombres = pines_previos['Nombre del Pin'].dropna().str.strip().tolist()
                     for _, r in pines_previos.iterrows():
                         estado_prev = r.get('Estado', 'ENTREGADO')
                         color = "🟢" if estado_prev == "ENTREGADO" else "🟡"
                         st.success(f"{color} **{r['Nombre del Pin']}** — *{estado_prev}* el {r.get('Fecha y Hora', 'N/D')}")
                 else:
                     st.write("✨ *Este estudiante aún no tiene ningún pin registrado.*")
+                    
+                st.markdown("---")
+                st.subheader("3. Asignar Nuevo Pin")
+                
+                todos_pines = df_pin['Nombre del Pin'].dropna().str.strip().tolist()
+                pines_disponibles = [p for p in todos_pines if p not in pines_ya_entregados_nombres]
+                
+                if not pines_disponibles:
+                    st.warning("⚠️ ¡El estudiante ya cuenta con todos los pines disponibles!")
+                else:
+                    with st.form("form_entrega_indiv"):
+                        pin_seleccionado = st.selectbox("Seleccione el Pin:", pines_disponibles)
+                        observacion = st.text_input("Observación / Motivo (opcional):", placeholder="Ej: Participación destacada...")
+                        
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        entregado_check = st.checkbox("✅ Marcar como 'ENTREGADO' físicamente", value=True)
+                        
+                        btn_entregar = st.form_submit_button("✅ Guardar Registro")
+                        
+                        if btn_entregar:
+                            estado_registro = "ENTREGADO" if entregado_check else "PENDIENTE"
+                            ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            
+                            wb = get_workbook()
+                            ws_ent = wb["ENTREGA_PIN"]
+                            nuevo_id = str(ws_ent.max_row).zfill(3)
+                            
+                            nueva_fila = [
+                                nuevo_id, ahora, dni_actual, alumno_sel['Estudiante'],
+                                alumno_sel['Grado y Sección'], pin_seleccionado, observacion, estado_registro
+                            ]
+                            ws_ent.append(nueva_fila)
+                            wb.save(EXCEL_PATH)
+                            st.balloons()
+                            st.success(f"¡Pin '{pin_seleccionado}' registrado con éxito en estado {estado_registro}!")
+                            st.rerun()
             else:
-                st.info(f"👥 **{len(alumnos_seleccionados)} alumnos seleccionados.**")
+                st.warning("No hay estudiantes para mostrar.")
+
+    elif modo_entrega == "👥 Por Bloques (Varios a la vez)":
+        st.caption("Busca y añade alumnos a tu 'Lista de Seleccionados' para asignarles pines de forma masiva.")
+        
+        if 'cart_pines' not in st.session_state:
+            st.session_state.cart_pines = {}
+        
+        col_izq, col_der = st.columns([1.3, 1])
+        
+        with col_izq:
+            st.subheader("1. Búsqueda de Estudiantes")
+            filtro_txt = st.text_input("🔍 Buscar por Nombre, DNI o Grado:", key="busq_entrega_bloque", placeholder="Escriba para filtrar...")
+            
+            df_busqueda = df_est[['DNI', 'Estudiante', 'Grado y Sección']].copy()
+            
+            if st.session_state.cart_pines:
+                df_busqueda = df_busqueda[~df_busqueda['DNI'].astype(str).isin(st.session_state.cart_pines.keys())]
+                
+            if filtro_txt:
+                condicion = (
+                    df_busqueda['Estudiante'].astype(str).str.contains(filtro_txt, case=False, na=False) |
+                    df_busqueda['DNI'].astype(str).str.contains(filtro_txt, case=False, na=False) |
+                    df_busqueda['Grado y Sección'].astype(str).str.contains(filtro_txt, case=False, na=False)
+                )
+                df_busqueda = df_busqueda[condicion]
+            
+            df_busqueda = df_busqueda.reset_index(drop=True)
+            
+            st.caption("👆 Selecciona casillas y presiona el botón para bajarlos a la lista:")
+            sel_top = st.dataframe(
+                df_busqueda,
+                use_container_width=True,
+                hide_index=True,
+                selection_mode="multi-row",
+                on_select="rerun",
+                key="tabla_busqueda_bloques"
+            )
+            
+            if st.button("⬇️ Añadir Marcados a la Lista", type="primary"):
+                filas_sel = sel_top.selection.get("rows", [])
+                for r in filas_sel:
+                    # CORRECCIÓN DEL BUG (IndexError): Verificar que r esté dentro de los límites
+                    if r < len(df_busqueda):
+                        alum = df_busqueda.iloc[r]
+                        st.session_state.cart_pines[str(alum['DNI'])] = alum.to_dict()
+                st.rerun()
+                    
+            st.markdown("---")
+            
+            st.subheader("2. Alumnos Seleccionados (Bloque a entregar)")
+            
+            if not st.session_state.cart_pines:
+                st.info("La lista está vacía. Busca alumnos arriba y añádelos.")
+                alumnos_seleccionados = []
+            else:
+                df_cart = pd.DataFrame(list(st.session_state.cart_pines.values()))
+                sel_bot = st.dataframe(
+                    df_cart,
+                    use_container_width=True,
+                    hide_index=True,
+                    selection_mode="multi-row",
+                    on_select="rerun",
+                    key="tabla_cart_bloques"
+                )
+                
+                if st.button("⬆️ Quitar Marcados de la Lista"):
+                    filas_bot = sel_bot.selection.get("rows", [])
+                    for r in filas_bot:
+                        if r < len(df_cart):
+                            dni_quitar = str(df_cart.iloc[r]['DNI'])
+                            if dni_quitar in st.session_state.cart_pines:
+                                del st.session_state.cart_pines[dni_quitar]
+                    st.rerun()
+                
+                alumnos_seleccionados = list(st.session_state.cart_pines.values())
+
+        with col_der:
+            if len(alumnos_seleccionados) > 0:
+                st.subheader("Resumen de Selección")
+                st.info(f"👥 **{len(alumnos_seleccionados)} alumnos en la lista.**")
                 nombres = [a['Estudiante'] for a in alumnos_seleccionados]
                 st.write(", ".join(nombres[:5]) + ("..." if len(nombres) > 5 else ""))
                 st.caption("Los pines repetidos serán omitidos automáticamente para cada alumno individual.")
+                    
+                st.markdown("---")
+                st.subheader("3. Asignar Nuevo Pin")
                 
-            st.markdown("---")
-            st.subheader("3. Asignar Nuevo Pin")
-            
-            todos_pines = df_pin['Nombre del Pin'].dropna().str.strip().tolist()
-            
-            if not todos_pines:
-                st.warning("⚠️ No hay pines en el catálogo.")
+                todos_pines = df_pin['Nombre del Pin'].dropna().str.strip().tolist()
+                
+                if not todos_pines:
+                    st.warning("⚠️ No hay pines en el catálogo.")
+                else:
+                    with st.form("form_entrega_bloque"):
+                        pin_seleccionado = st.selectbox("Seleccione el Pin:", todos_pines)
+                        observacion = st.text_input("Observación / Motivo (opcional):", placeholder="Ej: Participación destacada...")
+                        
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        entregado_check = st.checkbox("✅ Marcar como 'ENTREGADO' físicamente", value=True, help="Aplica para TODOS los alumnos seleccionados.")
+                        
+                        btn_entregar = st.form_submit_button("✅ Guardar Registro(s)")
+                        
+                        if btn_entregar:
+                            estado_registro = "ENTREGADO" if entregado_check else "PENDIENTE"
+                            ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            
+                            wb = get_workbook()
+                            ws_ent = wb["ENTREGA_PIN"]
+                            
+                            registros_exitosos = 0
+                            omitidos = []
+                            
+                            for alum in alumnos_seleccionados:
+                                dni_alum = str(alum['DNI'])
+                                ya_lo_tiene = False
+                                if not df_ent.empty:
+                                    check = df_ent[(df_ent['DNI'] == dni_alum) & (df_ent['Nombre del Pin'] == pin_seleccionado)]
+                                    if not check.empty:
+                                        ya_lo_tiene = True
+                                
+                                if ya_lo_tiene:
+                                    omitidos.append(alum['Estudiante'])
+                                else:
+                                    nuevo_id = str(ws_ent.max_row).zfill(3)
+                                    nueva_fila = [
+                                        nuevo_id, ahora, dni_alum, alum['Estudiante'],
+                                        alum['Grado y Sección'], pin_seleccionado, observacion, estado_registro
+                                    ]
+                                    ws_ent.append(nueva_fila)
+                                    registros_exitosos += 1
+                            
+                            wb.save(EXCEL_PATH)
+                            
+                            if registros_exitosos > 0:
+                                st.balloons()
+                                st.success(f"¡Se registraron {registros_exitosos} entregas exitosamente en estado {estado_registro}!")
+                            
+                            if omitidos:
+                                st.warning(f"Se omitieron {len(omitidos)} alumnos que ya tenían este pin (ej: {', '.join(omitidos[:3])}).")
+                                
+                            if registros_exitosos > 0 or omitidos:
+                                st.session_state.cart_pines = {}
+                                st.rerun()
             else:
-                with st.form("form_entrega_directo"):
-                    pin_seleccionado = st.selectbox("Seleccione el Pin:", todos_pines)
-                    observacion = st.text_input("Observación / Motivo (opcional):", placeholder="Ej: Participación destacada...")
-                    
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    entregado_check = st.checkbox("✅ Marcar como 'ENTREGADO' físicamente", value=True, help="Aplica para TODOS los alumnos seleccionados.")
-                    
-                    btn_entregar = st.form_submit_button("✅ Guardar Registro(s)")
-                    
-                    if btn_entregar:
-                        estado_registro = "ENTREGADO" if entregado_check else "PENDIENTE"
-                        ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        
-                        wb = get_workbook()
-                        ws_ent = wb["ENTREGA_PIN"]
-                        
-                        registros_exitosos = 0
-                        omitidos = []
-                        
-                        for alum in alumnos_seleccionados:
-                            dni_alum = str(alum['DNI'])
-                            ya_lo_tiene = False
-                            if not df_ent.empty:
-                                check = df_ent[(df_ent['DNI'] == dni_alum) & (df_ent['Nombre del Pin'] == pin_seleccionado)]
-                                if not check.empty:
-                                    ya_lo_tiene = True
-                            
-                            if ya_lo_tiene:
-                                omitidos.append(alum['Estudiante'])
-                            else:
-                                nuevo_id = str(ws_ent.max_row).zfill(3)
-                                nueva_fila = [
-                                    nuevo_id,
-                                    ahora,
-                                    dni_alum,
-                                    alum['Estudiante'],
-                                    alum['Grado y Sección'],
-                                    pin_seleccionado,
-                                    observacion,
-                                    estado_registro
-                                ]
-                                ws_ent.append(nueva_fila)
-                                registros_exitosos += 1
-                        
-                        wb.save(EXCEL_PATH)
-                        
-                        if registros_exitosos > 0:
-                            st.balloons()
-                            st.success(f"¡Se registraron {registros_exitosos} entregas exitosamente en estado {estado_registro}!")
-                        
-                        if omitidos:
-                            st.warning(f"Se omitieron {len(omitidos)} alumnos que ya tenían este pin (ej: {', '.join(omitidos[:3])}).")
-                            
-                        if registros_exitosos > 0 or omitidos:
-                            # Vaciar el carrito de sesión al terminar de entregar
-                            st.session_state.cart_pines = {}
-                            st.rerun()
-        else:
-            st.warning("No hay estudiantes en la lista para mostrar.")
+                st.warning("No hay estudiantes en la lista para mostrar.")
 
 # ==========================================================
 # 2. MODULO GESTIÓN DE ALUMNOS E IMPORTACIÓN
@@ -422,10 +483,7 @@ elif opcion == "👥 Gestión de Alumnos":
                 st.write("✅ **Vista previa de los datos encontrados:**")
                 st.dataframe(df_import.head(5))
                 
-                # Estandarizar nombres de columnas
                 cols = df_import.columns.astype(str).str.lower()
-                
-                # Buscar mapeos probables
                 col_dni = next((c for c in df_import.columns if 'dni' in c.lower()), None)
                 col_nom = next((c for c in df_import.columns if 'estudiante' in c.lower() or 'nombre' in c.lower() or 'alumno' in c.lower()), None)
                 col_gra = next((c for c in df_import.columns if 'grado' in c.lower() or 'sección' in c.lower() or 'seccion' in c.lower()), None)
@@ -450,7 +508,7 @@ elif opcion == "👥 Gestión de Alumnos":
                                 if d not in dnis_existentes:
                                     nro = ws.max_row
                                     ws.append([nro, d, n, g])
-                                    dnis_existentes.add(d) # Para evitar duplicados en el mismo archivo
+                                    dnis_existentes.add(d)
                                     agregados += 1
                                 else:
                                     omitidos += 1
@@ -464,7 +522,6 @@ elif opcion == "👥 Gestión de Alumnos":
                         if omitidos > 0:
                             st.warning(f"⚠️ Se omitieron {omitidos} registros porque el DNI ya existía.")
                         
-                        # Botón para recargar datos
                         if st.button("Actualizar Vista"):
                             st.rerun()
             except Exception as e:
@@ -606,7 +663,6 @@ elif opcion == "📊 Reportes y Consultas":
         df_mostrar_ent = df_mostrar_ent.reset_index(drop=True)
         
         st.caption("👆 Selecciona una fila para Modificar su Estado o Eliminarla:")
-        # Mostrar el dataframe y capturar selección
         sel_tabla_ent = st.dataframe(
             df_mostrar_ent,
             use_container_width=True,
@@ -628,7 +684,7 @@ elif opcion == "📊 Reportes y Consultas":
             
             accion_ent = st.radio("¿Qué deseas hacer?", ["✏️ Modificar Estado / Observación", "🗑️ Eliminar Registro"], horizontal=False)
             
-            st.info(f"**Alumno:** {entrega_sel_crud['Estudiante']}\n**Pin:** {entrega_sel_crud['Nombre del Pin']}\n**Estado Actual:** {entrega_sel_crud.get('Estado', 'ENTREGADO')}")
+            st.info(f"**Alumno:** {entrega_sel_crud['Estudiante']}\\n**Pin:** {entrega_sel_crud['Nombre del Pin']}\\n**Estado Actual:** {entrega_sel_crud.get('Estado', 'ENTREGADO')}")
             
             if accion_ent == "✏️ Modificar Estado / Observación":
                 with st.form("form_edit_entrega"):
@@ -645,8 +701,8 @@ elif opcion == "📊 Reportes y Consultas":
                         
                         for row in ws_ent.iter_rows(min_row=2):
                             if str(row[0].value) == nro_registro:
-                                row[6].value = nueva_obs  # Col G: Observacion
-                                row[7].value = nuevo_estado # Col H: Estado
+                                row[6].value = nueva_obs
+                                row[7].value = nuevo_estado
                                 break
                         wb.save(EXCEL_PATH)
                         st.success(f"¡Registro actualizado a {nuevo_estado}!")
@@ -669,3 +725,5 @@ elif opcion == "📊 Reportes y Consultas":
                         st.rerun()
         else:
             st.write("👈 Seleccione un registro en la tabla de la izquierda para editarlo o eliminarlo.")
+'''
+
