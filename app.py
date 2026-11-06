@@ -628,9 +628,7 @@ elif opcion == "📊 Reportes y Consultas":
             
             accion_ent = st.radio("¿Qué deseas hacer?", ["✏️ Modificar Estado / Observación", "🗑️ Eliminar Registro"], horizontal=False)
             
-            st.info(f"**Alumno:** {entrega_sel_crud['Estudiante']}
-**Pin:** {entrega_sel_crud['Nombre del Pin']}
-**Estado Actual:** {entrega_sel_crud.get('Estado', 'ENTREGADO')}")
+            st.info(f"**Alumno:** {entrega_sel_crud['Estudiante']}\n**Pin:** {entrega_sel_crud['Nombre del Pin']}\n**Estado Actual:** {entrega_sel_crud.get('Estado', 'ENTREGADO')}")
             
             if accion_ent == "✏️ Modificar Estado / Observación":
                 with st.form("form_edit_entrega"):
