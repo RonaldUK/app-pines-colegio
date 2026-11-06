@@ -28,7 +28,7 @@ def get_workbook():
         ws_est.append(["Nro", "DNI", "Estudiante", "Grado y Sección"])
         
         ws_ent = wb.create_sheet("ENTREGA_PIN")
-        ws_ent.append(["Nro", "Fecha y Hora", "DNI", "Estudiante", "Grado y Sección", "Nombre del Pin", "Observación"])
+        ws_ent.append(["Nro", "Fecha y Hora", "DNI", "Estudiante", "Grado y Sección", "Nombre del Pin", "Observación", "Estado"])
         
         ws_pin = wb.create_sheet("PINES")
         ws_pin.append(["Nro", "Nombre del Pin", "Categoría", "Descripción"])
@@ -48,7 +48,19 @@ def get_workbook():
             
         wb.create_sheet("REPORTES_RESUMEN")
         wb.save(EXCEL_PATH)
-    return openpyxl.load_workbook(EXCEL_PATH)
+    
+    # Check and add 'Estado' header if missing from older versions
+    wb = openpyxl.load_workbook(EXCEL_PATH)
+    if "ENTREGA_PIN" in wb.sheetnames:
+        ws_ent = wb["ENTREGA_PIN"]
+        headers = [cell.value for cell in ws_ent[1]]
+        if "Estado" not in headers:
+            ws_ent.cell(row=1, column=len(headers)+1, value="Estado")
+            for row_idx in range(2, ws_ent.max_row + 1):
+                ws_ent.cell(row=row_idx, column=len(headers)+1, value="ENTREGADO") # Valor por defecto a antiguos
+            wb.save(EXCEL_PATH)
+            
+    return wb
 
 def cargar_datos():
     wb = get_workbook()
@@ -81,8 +93,10 @@ def cargar_datos():
         df_ent = pd.DataFrame(data_ent[1:], columns=headers).dropna(how='all')
         if 'DNI' in df_ent.columns:
             df_ent['DNI'] = df_ent['DNI'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+        if 'Estado' not in df_ent.columns:
+            df_ent['Estado'] = 'ENTREGADO'
     else:
-        df_ent = pd.DataFrame(columns=["Nro", "Fecha y Hora", "DNI", "Estudiante", "Grado y Sección", "Nombre del Pin", "Observación"])
+        df_ent = pd.DataFrame(columns=["Nro", "Fecha y Hora", "DNI", "Estudiante", "Grado y Sección", "Nombre del Pin", "Observación", "Estado"])
         
     return df_est, df_pin, df_ent
 
@@ -156,7 +170,6 @@ if opcion == "🎁 Entrega de Pines":
             if idx < len(df_filtrada):
                 alumno_sel = df_filtrada.iloc[idx]
         elif not df_filtrada.empty:
-            # Si no ha hecho clic aún, tomar el primero por defecto o permitir elegir
             alumno_sel = df_filtrada.iloc[0]
 
     with col_der:
@@ -171,7 +184,9 @@ if opcion == "🎁 Entrega de Pines":
             if not pines_previos.empty:
                 pines_ya_entregados_nombres = pines_previos['Nombre del Pin'].dropna().str.strip().tolist()
                 for _, r in pines_previos.iterrows():
-                    st.success(f"🏅 **{r['Nombre del Pin']}** — *Entregado:* {r.get('Fecha y Hora', 'N/D')}")
+                    estado_prev = r.get('Estado', 'ENTREGADO')
+                    color = "🟢" if estado_prev == "ENTREGADO" else "🟡"
+                    st.success(f"{color} **{r['Nombre del Pin']}** — *{estado_prev}* el {r.get('Fecha y Hora', 'N/D')}")
             else:
                 st.write("✨ *Este estudiante aún no tiene ningún pin registrado.*")
                 
@@ -187,10 +202,16 @@ if opcion == "🎁 Entrega de Pines":
                 with st.form("form_entrega_directo"):
                     pin_seleccionado = st.selectbox("Seleccione el Pin:", pines_disponibles)
                     observacion = st.text_input("Observación / Motivo (opcional):", placeholder="Ej: Participación destacada...")
-                    btn_entregar = st.form_submit_button("✅ Entregar Pin")
+                    
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    entregado_check = st.checkbox("✅ Marcar como 'ENTREGADO' físicamente", value=True, help="Desmarca esta opción si el pin se entregará después (Quedará como PENDIENTE)")
+                    
+                    btn_entregar = st.form_submit_button("✅ Guardar Registro")
                     
                     if btn_entregar:
+                        estado_registro = "ENTREGADO" if entregado_check else "PENDIENTE"
                         ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        
                         wb = get_workbook()
                         ws_ent = wb["ENTREGA_PIN"]
                         nuevo_id = str(ws_ent.max_row).zfill(3)
@@ -202,12 +223,13 @@ if opcion == "🎁 Entrega de Pines":
                             alumno_sel['Estudiante'],
                             alumno_sel['Grado y Sección'],
                             pin_seleccionado,
-                            observacion
+                            observacion,
+                            estado_registro
                         ]
                         ws_ent.append(nueva_fila)
                         wb.save(EXCEL_PATH)
                         st.balloons()
-                        st.success(f"¡Pin '{pin_seleccionado}' registrado con éxito!")
+                        st.success(f"¡Pin '{pin_seleccionado}' registrado con éxito en estado {estado_registro}!")
                         st.rerun()
         else:
             st.warning("No hay estudiantes para mostrar.")
@@ -424,44 +446,97 @@ elif opcion == "🏷️ Gestión de Pines":
                         st.rerun()
 
 # ==========================================================
-# 4. MODULO REPORTES Y CONSULTAS
+# 4. MODULO REPORTES Y CONSULTAS (CON EDICIÓN DE ESTADO)
 # ==========================================================
 elif opcion == "📊 Reportes y Consultas":
-    st.header("Reportes y Estadísticas de Pines Entregados")
+    st.header("Gestión de Reportes y Entregas")
     
     col_m1, col_m2, col_m3 = st.columns(3)
     col_m1.metric("Total Estudiantes", len(df_est))
-    col_m2.metric("Total Entregas Realizadas", len(df_ent))
+    col_m2.metric("Total Entregas Registradas", len(df_ent))
     alumnos_con_pin = df_ent['DNI'].nunique() if not df_ent.empty else 0
     col_m3.metric("Estudiantes con al menos 1 Pin", alumnos_con_pin)
     
     st.markdown("---")
     
-    st.subheader("🔍 Consulta Historial por Estudiante")
-    busq_hist = st.text_input("Ingrese Nombre o DNI del Estudiante:", placeholder="Buscar...")
+    col_rep_izq, col_rep_der = st.columns([1.5, 1])
     
-    if busq_hist:
-        df_hist = df_ent[
-            df_ent['Estudiante'].astype(str).str.contains(busq_hist, case=False, na=False) |
-            df_ent['DNI'].astype(str).str.contains(busq_hist, case=False, na=False)
-        ]
-        if not df_hist.empty:
-            st.dataframe(df_hist[['Fecha y Hora', 'DNI', 'Estudiante', 'Grado y Sección', 'Nombre del Pin', 'Observación']], use_container_width=True, hide_index=True)
-        else:
-            st.warning("No se encontraron entregas para este estudiante.")
+    with col_rep_izq:
+        st.subheader("📋 Registro de Entregas")
+        busq_hist = st.text_input("🔍 Buscar por DNI, Nombre o Pin:", placeholder="Escriba para filtrar historial...")
+        
+        df_mostrar_ent = df_ent.copy()
+        if busq_hist:
+            df_mostrar_ent = df_mostrar_ent[
+                df_mostrar_ent['Estudiante'].astype(str).str.contains(busq_hist, case=False, na=False) |
+                df_mostrar_ent['DNI'].astype(str).str.contains(busq_hist, case=False, na=False) |
+                df_mostrar_ent['Nombre del Pin'].astype(str).str.contains(busq_hist, case=False, na=False)
+            ]
+        df_mostrar_ent = df_mostrar_ent.reset_index(drop=True)
+        
+        st.caption("👆 Selecciona una fila para Modificar su Estado o Eliminarla:")
+        # Mostrar el dataframe y capturar selección
+        sel_tabla_ent = st.dataframe(
+            df_mostrar_ent,
+            use_container_width=True,
+            hide_index=True,
+            selection_mode="single-row",
+            on_select="rerun",
+            key="tabla_crud_entregas"
+        )
+        
+        entrega_sel_crud = None
+        filas_ent = sel_tabla_ent.selection.get("rows", [])
+        if filas_ent and filas_ent[0] < len(df_mostrar_ent):
+            entrega_sel_crud = df_mostrar_ent.iloc[filas_ent[0]]
             
-    st.markdown("---")
-    st.subheader("📈 Resumen por Grado y Sección")
-    if not df_ent.empty and not df_est.empty:
-        resumen_grados = df_ent.groupby('Grado y Sección').agg(
-            Total_Pines_Entregados=('Nombre del Pin', 'count'),
-            Alumnos_Beneficiados=('DNI', 'nunique')
-        ).reset_index()
-        
-        st.dataframe(resumen_grados, use_container_width=True, hide_index=True)
-    else:
-        st.info("No hay datos suficientes para generar estadísticas.")
-        
-    st.markdown("---")
-    st.subheader("📋 Registro Completo de Entregas (Hoja ENTREGA_PIN)")
-    st.dataframe(df_ent, use_container_width=True, hide_index=True)
+    with col_rep_der:
+        st.subheader("⚙️ Acciones sobre el Registro")
+        if entrega_sel_crud is not None:
+            nro_registro = str(entrega_sel_crud['Nro'])
+            
+            accion_ent = st.radio("¿Qué deseas hacer?", ["✏️ Modificar Estado / Observación", "🗑️ Eliminar Registro"], horizontal=False)
+            
+            st.info(f"**Alumno:** {entrega_sel_crud['Estudiante']}\n**Pin:** {entrega_sel_crud['Nombre del Pin']}\n**Estado Actual:** {entrega_sel_crud.get('Estado', 'ENTREGADO')}")
+            
+            if accion_ent == "✏️ Modificar Estado / Observación":
+                with st.form("form_edit_entrega"):
+                    estado_actual = entrega_sel_crud.get('Estado', 'ENTREGADO')
+                    idx_est = 0 if estado_actual == "ENTREGADO" else 1
+                    nuevo_estado = st.selectbox("Cambiar Estado:", ["ENTREGADO", "PENDIENTE"], index=idx_est)
+                    nueva_obs = st.text_input("Observación:", value=entrega_sel_crud.get('Observación', ''))
+                    
+                    btn_upd_ent = st.form_submit_button("💾 Guardar Cambios")
+                    
+                    if btn_upd_ent:
+                        wb = get_workbook()
+                        ws_ent = wb["ENTREGA_PIN"]
+                        
+                        # Buscar la fila por el Nro
+                        for row in ws_ent.iter_rows(min_row=2):
+                            if str(row[0].value) == nro_registro:
+                                row[6].value = nueva_obs  # Col G: Observacion
+                                row[7].value = nuevo_estado # Col H: Estado
+                                break
+                        wb.save(EXCEL_PATH)
+                        st.success(f"¡Registro actualizado a {nuevo_estado}!")
+                        st.rerun()
+                        
+            elif accion_ent == "🗑️ Eliminar Registro":
+                st.warning("⚠️ Esta acción borrará la entrega y el pin volverá a estar disponible para el alumno.")
+                if st.button("🗑️ Confirmar Eliminación", type="primary"):
+                    wb = get_workbook()
+                    ws_ent = wb["ENTREGA_PIN"]
+                    fila_borrar = None
+                    for idx, row in enumerate(ws_ent.iter_rows(min_row=2), start=2):
+                        if str(row[0].value) == nro_registro:
+                            fila_borrar = idx
+                            break
+                    if fila_borrar:
+                        ws_ent.delete_rows(fila_borrar, 1)
+                        wb.save(EXCEL_PATH)
+                        st.success("Registro eliminado correctamente.")
+                        st.rerun()
+        else:
+            st.write("👈 Seleccione un registro en la tabla de la izquierda para editarlo o eliminarlo.")
+
