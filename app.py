@@ -130,51 +130,90 @@ except FileNotFoundError:
 df_est, df_pin, df_ent = cargar_datos()
 
 # ==========================================================
-# 1. MODULO DE ENTREGA DE PINES (ASIGNACIÓN MÚLTIPLE)
+# 1. MODULO DE ENTREGA DE PINES (CARRITO / BLOQUES)
 # ==========================================================
 if opcion == "🎁 Entrega de Pines":
-    st.header("Formulario de Entrega de Pines (Individual o Masiva)")
-    st.caption("Selecciona uno o VARIOS alumnos de la tabla para asignarles un pin al mismo tiempo.")
+    st.header("Formulario de Entrega de Pines por Bloques")
+    st.caption("Busca y añade alumnos a tu 'Lista de Seleccionados' para asignarles pines de forma masiva.")
+    
+    # Inicializar el carrito en session_state si no existe
+    if 'cart_pines' not in st.session_state:
+        st.session_state.cart_pines = {}
     
     col_izq, col_der = st.columns([1.3, 1])
     
     with col_izq:
-        st.subheader("1. Seleccionar Estudiante(s)")
+        # --- TABLA SUPERIOR: BÚSQUEDA ---
+        st.subheader("1. Búsqueda de Estudiantes")
         filtro_txt = st.text_input("🔍 Buscar por Nombre, DNI o Grado:", key="busq_entrega_pin", placeholder="Escriba para filtrar...")
         
-        df_filtrada = df_est[['DNI', 'Estudiante', 'Grado y Sección']].copy()
+        df_busqueda = df_est[['DNI', 'Estudiante', 'Grado y Sección']].copy()
+        
+        # Excluir de la búsqueda a los que ya están en la lista inferior
+        if st.session_state.cart_pines:
+            df_busqueda = df_busqueda[~df_busqueda['DNI'].astype(str).isin(st.session_state.cart_pines.keys())]
+            
         if filtro_txt:
             condicion = (
-                df_filtrada['Estudiante'].astype(str).str.contains(filtro_txt, case=False, na=False) |
-                df_filtrada['DNI'].astype(str).str.contains(filtro_txt, case=False, na=False) |
-                df_filtrada['Grado y Sección'].astype(str).str.contains(filtro_txt, case=False, na=False)
+                df_busqueda['Estudiante'].astype(str).str.contains(filtro_txt, case=False, na=False) |
+                df_busqueda['DNI'].astype(str).str.contains(filtro_txt, case=False, na=False) |
+                df_busqueda['Grado y Sección'].astype(str).str.contains(filtro_txt, case=False, na=False)
             )
-            df_filtrada = df_filtrada[condicion]
+            df_busqueda = df_busqueda[condicion]
         
-        df_filtrada = df_filtrada.reset_index(drop=True)
+        df_busqueda = df_busqueda.reset_index(drop=True)
         
-        # Tabla interactiva con selección múltiple
-        st.caption("👆 Haz clic en las casillas para seleccionar uno o varios alumnos:")
-        evento_seleccion = st.dataframe(
-            df_filtrada,
+        st.caption("👆 Selecciona casillas y presiona el botón para bajarlos a la lista:")
+        sel_top = st.dataframe(
+            df_busqueda,
             use_container_width=True,
             hide_index=True,
             selection_mode="multi-row",
             on_select="rerun",
-            key="tabla_alumnos_entrega"
+            key="tabla_busqueda_pines"
         )
         
-        alumnos_seleccionados = []
-        filas_seleccionadas = evento_seleccion.selection.get("rows", [])
-        if filas_seleccionadas:
-            alumnos_seleccionados = df_filtrada.iloc[filas_seleccionadas].to_dict('records')
-        elif not df_filtrada.empty:
-            # Si no hay selección, seleccionar el primero por defecto (opcional, pero para mantener la UI)
-            alumnos_seleccionados = [df_filtrada.iloc[0].to_dict()]
+        # Botón para añadir al carrito
+        if st.button("⬇️ Añadir Marcados a la Lista", type="primary"):
+            if sel_top.selection.rows:
+                for r in sel_top.selection.rows:
+                    alum = df_busqueda.iloc[r]
+                    st.session_state.cart_pines[str(alum['DNI'])] = alum.to_dict()
+                st.rerun()
+                
+        st.markdown("---")
+        
+        # --- TABLA INFERIOR: SELECCIONADOS ---
+        st.subheader("2. Alumnos Seleccionados (Bloque a entregar)")
+        
+        if not st.session_state.cart_pines:
+            st.info("La lista está vacía. Busca alumnos arriba y añádelos.")
+            alumnos_seleccionados = []
+        else:
+            df_cart = pd.DataFrame(list(st.session_state.cart_pines.values()))
+            sel_bot = st.dataframe(
+                df_cart,
+                use_container_width=True,
+                hide_index=True,
+                selection_mode="multi-row",
+                on_select="rerun",
+                key="tabla_cart_pines"
+            )
+            
+            # Botón para quitar del carrito
+            if st.button("⬆️ Quitar Marcados de la Lista"):
+                if sel_bot.selection.rows:
+                    for r in sel_bot.selection.rows:
+                        dni_quitar = str(df_cart.iloc[r]['DNI'])
+                        if dni_quitar in st.session_state.cart_pines:
+                            del st.session_state.cart_pines[dni_quitar]
+                    st.rerun()
+            
+            alumnos_seleccionados = list(st.session_state.cart_pines.values())
 
     with col_der:
         if len(alumnos_seleccionados) > 0:
-            st.subheader("2. Resumen de Selección")
+            st.subheader("Resumen de Selección")
             
             if len(alumnos_seleccionados) == 1:
                 alumno_sel = alumnos_seleccionados[0]
@@ -224,7 +263,6 @@ if opcion == "🎁 Entrega de Pines":
                         
                         for alum in alumnos_seleccionados:
                             dni_alum = str(alum['DNI'])
-                            # Validar si el alumno ya tiene ese pin
                             ya_lo_tiene = False
                             if not df_ent.empty:
                                 check = df_ent[(df_ent['DNI'] == dni_alum) & (df_ent['Nombre del Pin'] == pin_seleccionado)]
@@ -258,9 +296,11 @@ if opcion == "🎁 Entrega de Pines":
                             st.warning(f"Se omitieron {len(omitidos)} alumnos que ya tenían este pin (ej: {', '.join(omitidos[:3])}).")
                             
                         if registros_exitosos > 0 or omitidos:
+                            # Vaciar el carrito de sesión al terminar de entregar
+                            st.session_state.cart_pines = {}
                             st.rerun()
         else:
-            st.warning("No hay estudiantes para mostrar.")
+            st.warning("No hay estudiantes en la lista para mostrar.")
 
 # ==========================================================
 # 2. MODULO GESTIÓN DE ALUMNOS E IMPORTACIÓN
@@ -588,7 +628,9 @@ elif opcion == "📊 Reportes y Consultas":
             
             accion_ent = st.radio("¿Qué deseas hacer?", ["✏️ Modificar Estado / Observación", "🗑️ Eliminar Registro"], horizontal=False)
             
-            st.info(f"**Alumno:** {entrega_sel_crud['Estudiante']}\n**Pin:** {entrega_sel_crud['Nombre del Pin']}\n**Estado Actual:** {entrega_sel_crud.get('Estado', 'ENTREGADO')}")
+            st.info(f"**Alumno:** {entrega_sel_crud['Estudiante']}
+**Pin:** {entrega_sel_crud['Nombre del Pin']}
+**Estado Actual:** {entrega_sel_crud.get('Estado', 'ENTREGADO')}")
             
             if accion_ent == "✏️ Modificar Estado / Observación":
                 with st.form("form_edit_entrega"):
@@ -629,4 +671,3 @@ elif opcion == "📊 Reportes y Consultas":
                         st.rerun()
         else:
             st.write("👈 Seleccione un registro en la tabla de la izquierda para editarlo o eliminarlo.")
-
